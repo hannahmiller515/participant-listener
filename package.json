@@ -1,0 +1,28 @@
+{
+  "name": "participant-listener",
+  "version": "1.0.0",
+  "description": "Twitter Streaming API listener to identify and invite participants for the UMN Emoji Study",
+  "main": "participant_listener.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node participant_listener.js"
+  },
+  "keywords": [
+    "Twitter",
+    "Twitter Streaming API",
+    "participant",
+    "study",
+    "Twitter REST API"
+  ],
+  "author": {
+    "name": "Hannah Miller",
+    "email": "hmiller@cs.umn.edu",
+    "url": "http://www-users.umn.edu/~hmiller"
+  },
+  "dependencies": {
+    "emoji-regex": "^6.5.1",
+    "fast-csv": "^2.4.0",
+    "swearjar": "^0.2.0",
+    "twit": "^2.2.9"
+  }
+}
