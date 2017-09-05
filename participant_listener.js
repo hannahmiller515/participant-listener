@@ -1,9 +1,9 @@
 // participant_listener.js
-const VERBOSE = false;
+const VERBOSE = true;
 
 // Twitter Setup
 var twit = require('twit');  
-var config = require('./config.js');
+var config = require('./local_config.js');
 var swearjar = require('swearjar');
 
 var tweet_count = 0;
@@ -12,7 +12,7 @@ var emoji_tweet_count = 0;
 var simple_emoji_tweet_count = 0;
 var interval_count = 1;
 var interval_seconds = 60;
-var run_intervals = 60;
+var run_intervals = 1;
 var run_interval = setInterval(record_interval, interval_seconds * 1000) 
 
 var fs = require('fs');
@@ -89,13 +89,13 @@ function parseTweet(tweet_text) {
     var prevIndex = 0
     var text_frags = [];
     
-    var simple_emoji_tweet = true;
     var emoji_tweet = false;
     let match;
-    while (simple_emoji_tweet && (match = regex.exec(tweet_text))) {
+    while (match = regex.exec(tweet_text)) {
         emoji_tweet = true;
         
         //const emoji = match[0];
+        console.log(match[0]);
         var codePoints = [...match[0]];
         if(VERBOSE) { console.log(codePoints); }
         
@@ -103,37 +103,32 @@ function parseTweet(tweet_text) {
         if(match.index > prevIndex){
             text_frags.push(tweet_text.substring(prevIndex,match.index));
         } else {
+            // TODO
             // first char in text is an emoji
         }
         prevIndex = match.index + codePoints.length;
         
-        // Ignore complex emoji sequences -- want to focus on emoji where there is cross-platform compatibility
-        if(codePoints.length == 1 || (codePoints.length == 2 && codePoints[1].codePointAt(0).toString(16).toUpperCase() == 'FE0F')) {
-            var code = codePoints[0].codePointAt(0).toString(16).toUpperCase();
-            if(VERBOSE) { console.log(code); }
+        // IF WE WANTED TO IGNORE COMPLEX EMOJI: Ignore complex emoji sequences -- want to focus on emoji where there is cross-platform compatibility
+        // if(codePoints.length == 1 || (codePoints.length == 2 && codePoints[1].codePointAt(0).toString(16).toUpperCase() == 'FE0F')) {
+        
+        codes = [''];
+        for(var i = 0; i < codePoints.length; i++) {
+            var code = codePoints[i].codePointAt(0).toString(16).toUpperCase();
+            codes.push(code);
             if (code.length > 4) {
                 prevIndex++;
             }
-        } else {
-            simple_emoji_tweet = false;
-            /*
-            console.log(tweet_text);
-            console.log(codePoints);
-            codes = [];
-            for(var i = 0; i < codePoints.length; i++) {
-                codes.push(codePoints[i].codePointAt(0).toString(16).toUpperCase());
-            }
-            console.log(codes);
-            console.log();
-            */
         }
+        console.log(codes);
+        var codepoint_string = codes.join('U+');
+        console.log(codepoint_string);
+         
     }
-    if(simple_emoji_tweet && prevIndex < tweet_text.length) {
+    if(prevIndex < tweet_text.length) {
         text_frags.push(tweet_text.substring(prevIndex,tweet_text.length));
     }
     if(emoji_tweet) { 
         emoji_tweet_count++;
-        if(simple_emoji_tweet) { simple_emoji_tweet_count++; }
         if(VERBOSE) {
             console.log(tweet_text);
             console.log(text_frags);
