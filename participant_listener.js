@@ -1,29 +1,38 @@
 // participant_listener.js
 const VERBOSE = true;
+var config = require('./local_config.js');
+
+// Database Setup
+const mysql = require('mysql');
+const connection = mysql.createConnection(config);
+connection.connect((err) => {
+    if (err) throw err;
+    console.log('Connected!');
+});
+
+// Emoji Regex Setup
+const emojiRegex = require('emoji-regex');
+const regex = emojiRegex();
 
 // Twitter Setup
-var twit = require('twit');  
-var config = require('./local_config.js');
+var twit = require('twit');
 var swearjar = require('swearjar');
+
+// Throughput Output Setup
+var fs = require('fs');
+var csv = require('fast-csv');
+var csvStream = csv.createWriteStream({headers: true}),
+writableStream = fs.createWriteStream('throughput/throughput.csv');
+csvStream.pipe(writableStream);
 
 var tweet_count = 0;
 var filtered_tweet_count = 0;
 var emoji_tweet_count = 0;
 var simple_emoji_tweet_count = 0;
 var interval_count = 1;
-var interval_seconds = 60;
+var interval_seconds = 5;
 var run_intervals = 1;
 var run_interval = setInterval(record_interval, interval_seconds * 1000) 
-
-var fs = require('fs');
-var csv = require('fast-csv');
-var csvStream = csv.createWriteStream({headers: true}),
-    writableStream = fs.createWriteStream('throughput/throughput.csv');
-csvStream.pipe(writableStream); 
-                
-// Emoji Regex Setup
-const emojiRegex = require('emoji-regex');
-const regex = emojiRegex();
 
 
 // TWITTER STREAM AND HANDLERS
@@ -161,6 +170,7 @@ function record_interval() {
 function stop_program() {
     stream.stop();
     csvStream.end();
+    connection.destroy()
     clearInterval(run_interval);
     //console.log('Total tweets in stream in ' + interval_seconds + ' seconds: ' + tweet_count);
     //console.log('Tweets that suffice our filter: ' + filtered_tweet_count);
