@@ -56,10 +56,11 @@ var swearjar = require('swearjar');
 
 var TweetStacks = [[],[],[],[]];
 var sourceDict = {apple:0,android:1,windows:2,twitter:3};
-var TweetCounts = [{source_id:0,tweet_count:0},
-                   {source_id:1,tweet_count:0},
-                   {source_id:2,tweet_count:0},
-                   {source_id:3,tweet_count:0}];
+var TweetCounts = [{source_id:0,source:'apple',tweet_count:0},      // TODO tweet counts need to transcend "runs" of this program
+                   {source_id:1,source:'android',tweet_count:0},    // TODO (store counts in database / keep track over time)
+                   {source_id:2,source:'windows',tweet_count:0},
+                   {source_id:3,source:'twitter',tweet_count:0}];
+// Sort tweet counts from lowest to highest (so the lowest will be next to have a tweet sent)
 function sort_tweet_counts(a,b) {
     return a.tweet_count - b.tweet_count;
 }
@@ -112,6 +113,7 @@ stream.on('tweet', function (tweet) {
                 if(curStack.length > 10) {
                     curStack.shift();
                 }
+                if (VERBOSE) { console.log('pushing tweet onto stack for ' + source + ' (' + curStack.length + ' on stack)'); }
             }
         }
     }
@@ -199,6 +201,7 @@ function send_tweet() {
         return;
     }
 
+    if (VERBOSE) { console.log('from ' + TweetCounts[tweet_counts_index].source + ' stack'); }
     var curStackIndex = TweetCounts[tweet_counts_index].source_id;
     [tweet,num_emoji,tweet_frags] = TweetStacks[curStackIndex].pop();
 
@@ -261,10 +264,11 @@ function send_tweet() {
                 console.log(tweet_to_send);
 
                 // TODO send (reply)tweet
-                if (VERBOSE) { console.log('sending tweet...'); console.log(); console.log(); }
+                if (VERBOSE) { console.log('sending tweet...'); console.log(); }
 
                 TweetCounts[tweet_counts_index].tweet_count++;
                 TweetCounts.sort(sort_tweet_counts);
+                if (VERBOSE) { console.log(TweetCounts); console.log(); console.log(); }
             });
         });
     });
