@@ -11,7 +11,6 @@ connection.connect((err) => {
         console.log('Error connecting to Db');
         return;
     }
-    console.log('Connected to Db');
 });
 
 // participant, tweet, tweet fragment, survey insert queries
@@ -19,7 +18,10 @@ const participant_query = 'INSERT INTO participants SET ?';
 const tweet_query = 'INSERT INTO tweets SET ?';
 const tweet_frag_query = 'INSERT INTO tweet_fragments SET ?';
 const survey_query = 'INSERT INTO surveys SET ?';
+
+// emoji and tweet source count queries
 const emoji_query = 'SELECT codepoint_string,emoji_id FROM emoji ORDER BY num_renderings desc,num_platforms_support desc;';
+const tweet_count_query = 'SELECT sources.source_id,source_name as source,count(tweet_id) as tweet_count from tweets RIGHT JOIN sources ON tweets.source_id=sources.source_id GROUP BY source_id;';
 
 // load the emoji dictionary (for emoji id lookup by codepoint string): codepoint_string => emoji_id
 let emoji_dict = {};
@@ -27,12 +29,16 @@ connection.query(emoji_query, function (error, results, fields) {
     results.forEach( (row) => {
         emoji_dict[row.codepoint_string] = row.emoji_id;
     });
-    console.log('Emoji dictionary loaded');
 });
 
 // Emoji Regex Setup
 const emojiRegex = require('emoji-regex');
 const regex = emojiRegex();
+
+// Z API Setup
+var jwt = require('jsonwebtoken');
+var Client = require('node-rest-client').Client;
+var client = new Client();
 
 // Throughput Output Setup
 var fs = require('fs');
@@ -54,12 +60,16 @@ const run_interval = setInterval(record_interval, interval_seconds * 1000);
 var twit = require('twit');
 var swearjar = require('swearjar');
 
-var TweetStacks = [[],[],[],[]];
-var sourceDict = {apple:0,android:1,windows:2,twitter:3};
-var TweetCounts = [{source_id:0,source:'apple',tweet_count:0},      // TODO tweet counts need to transcend "runs" of this program
-                   {source_id:1,source:'android',tweet_count:0},    // TODO (store counts in database / keep track over time)
-                   {source_id:2,source:'windows',tweet_count:0},
-                   {source_id:3,source:'twitter',tweet_count:0}];
+// Create tweet stack for each source, indexed by the source id (in the database) (zero index placeholder)
+var TweetStacks = [[],[],[],[],[]];
+var sourceDict = {android:1,apple:2,windows:3,twitter:4};
+// load the tweet counts for each source
+var TweetCounts = [];
+connection.query(tweet_count_query, function (error, results, fields) {
+    results.forEach( (row) => {
+        TweetCounts.push({source_id:row.source_id,source:row.source,tweet_count:row.tweet_count,tweet_count_at_start:row.tweet_count});
+    });
+});
 // Sort tweet counts from lowest to highest (so the lowest will be next to have a tweet sent)
 function sort_tweet_counts(a,b) {
     return a.tweet_count - b.tweet_count;
@@ -68,7 +78,7 @@ function sort_tweet_counts(a,b) {
 // get random number of seconds between 0 and 8 (TODO set max and min seconds)
 var random_tweet_interval = function() {
     var interval = Math.ceil(Math.random()*8);
-    if (VERBOSE) { console.log('send next tweet in ' + interval + ' seconds'); }
+    if (VERBOSE) { console.log('timeout set: next tweet will be sent in ' + interval + ' seconds'); }
     return interval*1000;
 }
 var send_tweet_timeout = setTimeout(send_tweet, random_tweet_interval());
@@ -119,7 +129,7 @@ stream.on('tweet', function (tweet) {
                 if(curStack.length > 10) {
                     curStack.shift();
                 }
-                if (VERBOSE) { console.log('pushing tweet onto stack for ' + source + ' (' + curStack.length + ' on stack)'); }
+                if (VERBOSE) { console.log('pushing tweet onto stack for ' + source + ' (' + curStack.length + ' on stack)'); console.log(); }
             }
         }
     }
@@ -185,17 +195,18 @@ function parseTweet(tweet_text) {
     if(num_emoji>0) {
         emoji_tweet_count++;
         if(VERBOSE) {
+            console.log();
+            console.log('EMOJI TWEET FOUND');
             console.log(tweet_text);
             console.log(tweet_fragments);
-            console.log();
         } 
     }
     return [num_emoji,tweet_fragments];
 }
 
-function send_tweet() {
-    if (VERBOSE) { console.log(); console.log(); console.log('SENDING TWEET'); }
-    send_tweet_timeout = setTimeout(send_tweet, random_tweet_interval());
+function send_tweet(retry=undefined) {
+    if (VERBOSE) { console.log(); console.log('SENDING TWEET'); }
+    if (retry==undefined) { send_tweet_timeout = setTimeout(send_tweet, random_tweet_interval()); }
 
     let tweet_counts_index = 0;
     while (tweet_counts_index< 4 && TweetStacks[TweetCounts[tweet_counts_index].source_id].length == 0) {
@@ -204,10 +215,11 @@ function send_tweet() {
     }
     if(tweet_counts_index == 4) {
         console.log('no tweets queued');
+        console.log();
         return;
     }
 
-    if (VERBOSE) { console.log('from ' + TweetCounts[tweet_counts_index].source + ' stack'); }
+    if (VERBOSE) { console.log('current tweet from ' + TweetCounts[tweet_counts_index].source + ' stack'); }
     var curStackIndex = TweetCounts[tweet_counts_index].source_id;
     [tweet,num_emoji,tweet_frags] = TweetStacks[curStackIndex].pop();
 
@@ -223,7 +235,7 @@ function send_tweet() {
     connection.query(participant_query, participant_data, function (error, results, fields) {
         if (error) {
             console.log('ERROR inserting participant: ' + error);
-            send_tweet();
+            send_tweet(true);
             return;
         }
         var participant_id = results.insertId;
@@ -231,7 +243,7 @@ function send_tweet() {
 
         var tweet_data = {text:tweet.text,
                           num_emoji:num_emoji,
-                          source_id:curStackIndex+1,
+                          source_id:curStackIndex,
                           tweet_created_at:tweet.created_at};
         connection.query(tweet_query, tweet_data, function (error, results, fields) {
             if (error) throw error;
@@ -262,19 +274,38 @@ function send_tweet() {
                 var survey_id = results.insertId;
                 if (VERBOSE) { console.log('inserted survey at id ' + survey_id); }
 
-                // TODO create short link with survey id
-                var link = 'http://emojistudy.umn.edu/survey/id/' + survey_id;
+                var link = config.study_link + survey_id;
+                var payload = {
+                    urls: [
+                        { url: link,
+                          collection: config.z_api_collection }
+                    ]
+                }
+                var token = jwt.sign(payload, config.z_api_secret_key);
+                var args = {
+                    headers: { "Content-Type": "application/json",
+                               "Authorization": config.z_api_access_id+':'+token }
+                };
+                client.post("https://z.umn.edu/api/v1/urls", args, function (data, response) {
+                    if (data[0].result.status == 'success') {
+                        link = data[0].result.message;
+                        if (VERBOSE) { console.log('short link created: ' + link); }
 
-                var tweet_to_send = '@' + tweet.user.screen_name + tweet_templates[Math.floor(Math.random()*tweet_templates.length)] + link;
-                console.log('TWEET:');
-                console.log(tweet_to_send);
+                        var tweet_to_send = '@' + tweet.user.screen_name + tweet_templates[Math.floor(Math.random()*tweet_templates.length)] + link;
+                        console.log('TWEET:');
+                        console.log(tweet_to_send);
 
-                // TODO send (reply)tweet
-                if (VERBOSE) { console.log('sending tweet...'); console.log(); }
+                        // TODO send (reply)tweet
+                        if (VERBOSE) { console.log('sending tweet...'); console.log(); }
 
-                TweetCounts[tweet_counts_index].tweet_count++;
-                TweetCounts.sort(sort_tweet_counts);
-                if (VERBOSE) { console.log(TweetCounts); console.log(); console.log(); }
+                        TweetCounts[tweet_counts_index].tweet_count++;
+                        TweetCounts.sort(sort_tweet_counts);
+                        if (VERBOSE) { console.log(TweetCounts); console.log(); }
+                    } else {
+                        console.log('error creating z short link:');
+                        console.log(data.result.message);
+                    }
+                });
             });
         });
     });

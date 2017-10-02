@@ -22,7 +22,9 @@
   "dependencies": {
     "emoji-regex": "^6.5.1",
     "fast-csv": "^2.4.0",
+    "jsonwebtoken": "^8.0.1",
     "mysql": "^2.14.1",
+    "node-rest-client": "^3.1.0",
     "swearjar": "^0.2.0",
     "twit": "^2.2.9"
   }
