@@ -65,8 +65,14 @@ function sort_tweet_counts(a,b) {
     return a.tweet_count - b.tweet_count;
 }
 
-const tweet_interval_seconds = 5;
-const send_tweet_interval = setInterval(send_tweet, tweet_interval_seconds * 1000);
+// get random number of seconds between 0 and 8 (TODO set max and min seconds)
+var random_tweet_interval = function() {
+    var interval = Math.ceil(Math.random()*8);
+    if (VERBOSE) { console.log('send next tweet in ' + interval + ' seconds'); }
+    return interval*1000;
+}
+var send_tweet_timeout = setTimeout(send_tweet, random_tweet_interval());
+
 const tweet_templates = [' We’re Univ of MN researchers studying emoji usage. Pls take our ~5min survey to help us learn more. ',
                          ' We’re Univ of MN researchers studying emoji and we noticed you just tweeted one. Pls help us learn more via a short survey: '];
 // TODO Tweet templates (check account tweet capacity)
@@ -145,7 +151,7 @@ function parseTweet(tweet_text) {
     var prevIndex = 0;
     var num_emoji = 0;
     var tweet_fragments = [];
-    // tweet fragment: [isText, value] | value = codepoint string or text fragment
+    // tweet fragment: {isText:, value:} | value = codepoint string or text fragment
 
     let match;
     while (match = regex.exec(tweet_text)) {
@@ -189,7 +195,7 @@ function parseTweet(tweet_text) {
 
 function send_tweet() {
     if (VERBOSE) { console.log(); console.log(); console.log('SENDING TWEET'); }
-    // TODO random sleep
+    send_tweet_timeout = setTimeout(send_tweet, random_tweet_interval());
 
     let tweet_counts_index = 0;
     while (tweet_counts_index< 4 && TweetStacks[TweetCounts[tweet_counts_index].source_id].length == 0) {
@@ -297,7 +303,7 @@ function stop_program() {
     stream.stop();
     csvStream.end();
     connection.destroy();
-    clearInterval(send_tweet_interval);
+    clearTimeout(send_tweet_timeout);
     clearInterval(run_interval);
     //console.log('Total tweets in stream in ' + interval_seconds + ' seconds: ' + tweet_count);
     //console.log('Tweets that suffice our filter: ' + filtered_tweet_count);
