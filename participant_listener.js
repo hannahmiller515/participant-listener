@@ -6,23 +6,39 @@ var config = require('./local_config.js');
 const mysql = require('mysql');
 const connection = mysql.createConnection(config);
 connection.connect((err) => {
-    if (err) throw err;
-    console.log('Connected!');
+    if (err) {
+        console.log(err);
+        console.log('Error connecting to Db');
+        return;
+    }
+    console.log('Connected to Db');
+});
+
+// participant, tweet, tweet fragment, survey insert queries
+const participant_query = 'INSERT INTO participants SET ?';
+const tweet_query = 'INSERT INTO tweets SET ?';
+const tweet_frag_query = 'INSERT INTO tweet_fragments SET ?';
+const survey_query = 'INSERT INTO surveys SET ?';
+const emoji_query = 'SELECT codepoint_string,emoji_id FROM emoji ORDER BY num_renderings desc,num_platforms_support desc;';
+
+// load the emoji dictionary (for emoji id lookup by codepoint string): codepoint_string => emoji_id
+let emoji_dict = {};
+connection.query(emoji_query, function (error, results, fields) {
+    results.forEach( (row) => {
+        emoji_dict[row.codepoint_string] = row.emoji_id;
+    });
+    console.log('Emoji dictionary loaded');
 });
 
 // Emoji Regex Setup
 const emojiRegex = require('emoji-regex');
 const regex = emojiRegex();
 
-// Twitter Setup
-var twit = require('twit');
-var swearjar = require('swearjar');
-
 // Throughput Output Setup
 var fs = require('fs');
 var csv = require('fast-csv');
-var csvStream = csv.createWriteStream({headers: true}),
-writableStream = fs.createWriteStream('throughput/throughput.csv');
+var csvStream = csv.createWriteStream({headers: true});
+var writableStream = fs.createWriteStream('throughput/throughput.csv');
 csvStream.pipe(writableStream);
 
 var tweet_count = 0;
@@ -30,10 +46,29 @@ var filtered_tweet_count = 0;
 var emoji_tweet_count = 0;
 var simple_emoji_tweet_count = 0;
 var interval_count = 1;
-var interval_seconds = 5;
-var run_intervals = 1;
-var run_interval = setInterval(record_interval, interval_seconds * 1000) 
+const interval_seconds = 20;
+const run_intervals = 1;
+const run_interval = setInterval(record_interval, interval_seconds * 1000);
 
+// Twitter Setup
+var twit = require('twit');
+var swearjar = require('swearjar');
+
+var TweetStacks = [[],[],[],[]];
+var sourceDict = {apple:0,android:1,windows:2,twitter:3};
+var TweetCounts = [{source_id:0,tweet_count:0},
+                   {source_id:1,tweet_count:0},
+                   {source_id:2,tweet_count:0},
+                   {source_id:3,tweet_count:0}];
+function sort_tweet_counts(a,b) {
+    return a.tweet_count - b.tweet_count;
+}
+
+const tweet_interval_seconds = 5;
+const send_tweet_interval = setInterval(send_tweet, tweet_interval_seconds * 1000);
+const tweet_templates = [' We’re Univ of MN researchers studying emoji usage. Pls take our ~5min survey to help us learn more. ',
+                         ' We’re Univ of MN researchers studying emoji and we noticed you just tweeted one. Pls help us learn more via a short survey: '];
+// TODO Tweet templates (check account tweet capacity)
 
 // TWITTER STREAM AND HANDLERS
 var Twitter = new twit(config);
@@ -57,17 +92,27 @@ stream.on('tweet', function (tweet) {
        ) {
         
         filtered_tweet_count++;
-        var inviteParticipant = parseTweet(tweet.text);
-        if(inviteParticipant) {
-            // Collect
-            // tweet.user.id_str
-            // tweet.user.screen_name
-            // tweet.user.name
-            // tweet.user.created_at
-            // tweet.user.friends_count
-            // tweet.user.followers_count
-            // tweet.user.statuses_count
-            // tweet.user.favourites_count
+        [num_emoji,tweet_fragments] = parseTweet(tweet.text);
+
+        if(num_emoji > 0) {
+            var source = undefined;
+            if(tweet.source.lastIndexOf('Twitter for iPhone')!=-1 || tweet.source.lastIndexOf('Twitter for iPad')!=-1 || tweet.source.lastIndexOf('Twitter for Mac')!=-1) {
+                source = 'apple';
+            } else if(tweet.source.lastIndexOf('Twitter for Android')!=-1) {
+                source = 'android';
+            } else if(tweet.source.lastIndexOf('Twitter for Windows')!=-1) {
+                source = 'windows';
+            } else if(tweet.source.lastIndexOf('Twitter Web Client')!=-1) {
+                source = 'twitter';
+            }
+
+            if(source) {
+                curStack = TweetStacks[sourceDict[source]];
+                curStack.push([tweet,num_emoji,tweet_fragments]);
+                if(curStack.length > 10) {
+                    curStack.shift();
+                }
+            }
         }
     }
 });
@@ -95,31 +140,25 @@ function profanity_check(tweet) {
 
 // Function to parse tweet for emoji
 function parseTweet(tweet_text) {
-    var prevIndex = 0
-    var text_frags = [];
-    
-    var emoji_tweet = false;
+    var prevIndex = 0;
+    var num_emoji = 0;
+    var tweet_fragments = [];
+    // tweet fragment: [isText, value] | value = codepoint string or text fragment
+
     let match;
     while (match = regex.exec(tweet_text)) {
-        emoji_tweet = true;
+        num_emoji++;
         
         //const emoji = match[0];
-        console.log(match[0]);
         var codePoints = [...match[0]];
-        if(VERBOSE) { console.log(codePoints); }
         
         // Extract preceding text fragment (between prev emoji in string and currently matched emoji)
         if(match.index > prevIndex){
-            text_frags.push(tweet_text.substring(prevIndex,match.index));
-        } else {
-            // TODO
-            // first char in text is an emoji
+            var text_frag = tweet_text.substring(prevIndex,match.index);
+            tweet_fragments.push({isText:true,value:text_frag});
         }
         prevIndex = match.index + codePoints.length;
-        
-        // IF WE WANTED TO IGNORE COMPLEX EMOJI: Ignore complex emoji sequences -- want to focus on emoji where there is cross-platform compatibility
-        // if(codePoints.length == 1 || (codePoints.length == 2 && codePoints[1].codePointAt(0).toString(16).toUpperCase() == 'FE0F')) {
-        
+
         codes = [''];
         for(var i = 0; i < codePoints.length; i++) {
             var code = codePoints[i].codePointAt(0).toString(16).toUpperCase();
@@ -128,25 +167,108 @@ function parseTweet(tweet_text) {
                 prevIndex++;
             }
         }
-        console.log(codes);
-        var codepoint_string = codes.join('U+');
-        console.log(codepoint_string);
-         
+        tweet_fragments.push({isText:false,value:codes.join('U+')});
     }
+
     if(prevIndex < tweet_text.length) {
-        text_frags.push(tweet_text.substring(prevIndex,tweet_text.length));
+        var text_frag = tweet_text.substring(prevIndex,tweet_text.length);
+        tweet_fragments.push({isText:true,value:text_frag});
     }
-    if(emoji_tweet) { 
+    if(num_emoji>0) {
         emoji_tweet_count++;
         if(VERBOSE) {
             console.log(tweet_text);
-            console.log(text_frags);
+            console.log(tweet_fragments);
             console.log();
         } 
     }
-    return emoji_tweet;
+    return [num_emoji,tweet_fragments];
 }
 
+function send_tweet() {
+    if (VERBOSE) { console.log(); console.log(); console.log('SENDING TWEET'); }
+    // TODO random sleep
+
+    let tweet_counts_index = 0;
+    while (tweet_counts_index< 4 && TweetStacks[TweetCounts[tweet_counts_index].source_id].length == 0) {
+        // increment the stack
+        tweet_counts_index++;
+    }
+    if(tweet_counts_index == 4) {
+        console.log('no tweets queued');
+        return;
+    }
+
+    var curStackIndex = TweetCounts[tweet_counts_index].source_id;
+    [tweet,num_emoji,tweet_frags] = TweetStacks[curStackIndex].pop();
+
+    var participant_data = {twitter_id_str:tweet.user.id_str,
+                            twitter_handle:tweet.user.screen_name,
+                            display_name:tweet.user.name,
+                            account_created_at:tweet.user.created_at,
+                            friends_count:tweet.user.friends_count,
+                            followers_count:tweet.user.followers_count,
+                            statuses_count:tweet.user.statuses_count,
+                            favorites_count:tweet.user.favourites_count};
+
+    connection.query(participant_query, participant_data, function (error, results, fields) {
+        if (error) {
+            console.log('ERROR inserting participant: ' + error);
+            send_tweet();
+            return;
+        }
+        var participant_id = results.insertId;
+        if (VERBOSE) { console.log('inserted participant at id ' + participant_id); }
+
+        var tweet_data = {text:tweet.text,
+                          num_emoji:num_emoji,
+                          source_id:curStackIndex+1,
+                          tweet_created_at:tweet.created_at};
+        connection.query(tweet_query, tweet_data, function (error, results, fields) {
+            if (error) throw error;
+            var tweet_id = results.insertId;
+            if (VERBOSE) { console.log('inserted tweet at id ' + tweet_id); }
+
+            var sequence = 1;
+            tweet_frags.forEach( (tweet_frag) => {
+                var text = tweet_frag.isText ? tweet_frag.value : undefined;
+                var emoji_id = !tweet_frag.isText ? emoji_dict[tweet_frag.value] : undefined;
+                var tweet_frag_data = {tweet_id:tweet_id,
+                                       is_text:tweet_frag.isText,
+                                       text:text,
+                                       emoji_id:emoji_id,
+                                       sequence_index:sequence};
+                connection.query(tweet_frag_query, tweet_frag_data, function (error, results, fields) {
+                    if (error) throw error;
+                    if (VERBOSE) { console.log('inserted tweet fragment'); }
+                });
+                sequence++;
+            });
+
+            var survey_data = {participant_twitter_handle:tweet.user.screen_name,
+                               participant_id:participant_id,
+                               tweet_id:tweet_id};
+            connection.query(survey_query, survey_data, function (error, results, fields) {
+                if (error) throw error;
+                var survey_id = results.insertId;
+                if (VERBOSE) { console.log('inserted survey at id ' + survey_id); }
+
+                // TODO create short link with survey id
+                var link = 'http://emojistudy.umn.edu/survey/id/' + survey_id;
+
+                var tweet_to_send = '@' + tweet.user.screen_name + tweet_templates[Math.floor(Math.random()*tweet_templates.length)] + link;
+                console.log('TWEET:');
+                console.log(tweet_to_send);
+
+                // TODO send (reply)tweet
+                if (VERBOSE) { console.log('sending tweet...'); console.log(); console.log(); }
+
+                TweetCounts[tweet_counts_index].tweet_count++;
+                TweetCounts.sort(sort_tweet_counts);
+            });
+        });
+    });
+}
 
 function record_interval() {
     csvStream.write({
@@ -170,7 +292,8 @@ function record_interval() {
 function stop_program() {
     stream.stop();
     csvStream.end();
-    connection.destroy()
+    connection.destroy();
+    clearInterval(send_tweet_interval);
     clearInterval(run_interval);
     //console.log('Total tweets in stream in ' + interval_seconds + ' seconds: ' + tweet_count);
     //console.log('Tweets that suffice our filter: ' + filtered_tweet_count);
