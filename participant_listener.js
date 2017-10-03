@@ -1,5 +1,5 @@
 // participant_listener.js
-const VERBOSE = true;
+const VERBOSE = false;
 var config = require('./local_config.js');
 
 // Database Setup
@@ -52,7 +52,7 @@ var filtered_tweet_count = 0;
 var emoji_tweet_count = 0;
 var simple_emoji_tweet_count = 0;
 var interval_count = 1;
-const interval_seconds = 20;
+const interval_seconds = 3600;
 const run_intervals = 1;
 const run_interval = setInterval(record_interval, interval_seconds * 1000);
 
@@ -77,7 +77,9 @@ function sort_tweet_counts(a,b) {
 
 // get random number of seconds between 0 and 8 (TODO set max and min seconds)
 var random_tweet_interval = function() {
-    var interval = Math.ceil(Math.random()*8);
+    var min_seconds = 16;
+    var max_seconds = 33;
+    var interval = Math.ceil(Math.random()*(max_seconds-min_seconds)+min_seconds);
     if (VERBOSE) { console.log('timeout set: next tweet will be sent in ' + interval + ' seconds'); }
     return interval*1000;
 }
@@ -185,6 +187,8 @@ function parseTweet(tweet_text) {
                 prevIndex++;
             }
         }
+
+        if(codes.length==3 && codes[2]=='FE0F'){ codes.pop(); }
         tweet_fragments.push({isText:false,value:codes.join('U+')});
     }
 
@@ -204,9 +208,9 @@ function parseTweet(tweet_text) {
     return [num_emoji,tweet_fragments];
 }
 
-function send_tweet(retry=undefined) {
+function send_tweet() {
     if (VERBOSE) { console.log(); console.log('SENDING TWEET'); }
-    if (retry==undefined) { send_tweet_timeout = setTimeout(send_tweet, random_tweet_interval()); }
+    send_tweet_timeout = setTimeout(send_tweet, random_tweet_interval());
 
     let tweet_counts_index = 0;
     while (tweet_counts_index< 4 && TweetStacks[TweetCounts[tweet_counts_index].source_id].length == 0) {
@@ -235,7 +239,8 @@ function send_tweet(retry=undefined) {
     connection.query(participant_query, participant_data, function (error, results, fields) {
         if (error) {
             console.log('ERROR inserting participant: ' + error);
-            send_tweet(true);
+            clearTimeout(send_tweet_timeout);
+            send_tweet();
             return;
         }
         var participant_id = results.insertId;
@@ -251,20 +256,38 @@ function send_tweet(retry=undefined) {
             if (VERBOSE) { console.log('inserted tweet at id ' + tweet_id); }
 
             var sequence = 1;
+            var emoji_not_found = false;
             tweet_frags.forEach( (tweet_frag) => {
-                var text = tweet_frag.isText ? tweet_frag.value : undefined;
-                var emoji_id = !tweet_frag.isText ? emoji_dict[tweet_frag.value] : undefined;
-                var tweet_frag_data = {tweet_id:tweet_id,
-                                       is_text:tweet_frag.isText,
-                                       text:text,
-                                       emoji_id:emoji_id,
-                                       sequence_index:sequence};
-                connection.query(tweet_frag_query, tweet_frag_data, function (error, results, fields) {
-                    if (error) throw error;
-                    if (VERBOSE) { console.log('inserted tweet fragment'); }
-                });
-                sequence++;
+                if(!emoji_not_found) {
+                    var emoji_id = !tweet_frag.isText ? emoji_dict[tweet_frag.value] : undefined;
+                    if (!tweet_frag.isText && emoji_id == undefined) {
+                        console.log('EMOJI NOT FOUND: ' + tweet_frag.value);
+                        emoji_not_found = true;
+                    }
+
+                    var text = tweet_frag.isText ? tweet_frag.value : undefined;
+                    var tweet_frag_data = {
+                        tweet_id: tweet_id,
+                        is_text: tweet_frag.isText,
+                        text: text,
+                        emoji_id: emoji_id,
+                        sequence_index: sequence
+                    };
+                    connection.query(tweet_frag_query, tweet_frag_data, function (error, results, fields) {
+                        if (error) throw error;
+                        if (VERBOSE) {
+                            console.log('inserted tweet fragment');
+                        }
+                    });
+                    sequence++;
+                }
             });
+            if(emoji_not_found) {
+                console.log('Skipping this tweet');
+                clearTimeout(send_tweet_timeout);
+                send_tweet();
+                return;
+            }
 
             var survey_data = {participant_twitter_handle:tweet.user.screen_name,
                                participant_id:participant_id,
@@ -286,26 +309,32 @@ function send_tweet(retry=undefined) {
                     headers: { "Content-Type": "application/json",
                                "Authorization": config.z_api_access_id+':'+token }
                 };
+                /*
                 client.post("https://z.umn.edu/api/v1/urls", args, function (data, response) {
                     if (data[0].result.status == 'success') {
-                        link = data[0].result.message;
+                        link = data[0].result.message; // TODO strip https:// off link?
                         if (VERBOSE) { console.log('short link created: ' + link); }
 
-                        var tweet_to_send = '@' + tweet.user.screen_name + tweet_templates[Math.floor(Math.random()*tweet_templates.length)] + link;
-                        console.log('TWEET:');
-                        console.log(tweet_to_send);
-
-                        // TODO send (reply)tweet
-                        if (VERBOSE) { console.log('sending tweet...'); console.log(); }
-
-                        TweetCounts[tweet_counts_index].tweet_count++;
-                        TweetCounts.sort(sort_tweet_counts);
-                        if (VERBOSE) { console.log(TweetCounts); console.log(); }
+                        // TODO Put code below back in here
                     } else {
                         console.log('error creating z short link:');
                         console.log(data.result.message);
                     }
                 });
+                */
+                var tweet_to_send = '@' + tweet.user.screen_name + tweet_templates[Math.floor(Math.random()*tweet_templates.length)] + link;
+
+                // TODO send (reply)tweet
+                if (VERBOSE) {
+                    console.log('TWEET:');
+                    console.log(tweet_to_send);
+                    console.log('sending tweet...');
+                    console.log();
+                }
+
+                TweetCounts[tweet_counts_index].tweet_count++;
+                TweetCounts.sort(sort_tweet_counts);
+                if (VERBOSE) { console.log(TweetCounts); console.log(); }
             });
         });
     });
