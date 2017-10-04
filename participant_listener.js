@@ -57,7 +57,7 @@ var android_count = 0;
 var windows_count = 0;
 var twitter_count = 0;
 var interval_count = 1;
-const interval_seconds = 5;
+const interval_seconds = 60;
 const run_intervals = undefined;
 const run_interval = setInterval(record_interval, interval_seconds * 1000);
 
@@ -72,7 +72,6 @@ connection.query(tweet_count_query, function (error, results, fields) {
         TweetCounts.push({source_id:row.source_id,source:row.source,tweet_count:row.tweet_count,tweet_count_at_start:row.tweet_count});
     });
     TweetCounts.sort(sort_tweet_counts);
-    console.log(TweetCounts);
 });
 
 // Sort tweet counts from lowest to highest (so the lowest will be next to have a tweet sent)
@@ -80,10 +79,10 @@ function sort_tweet_counts(a,b) {
     return a.tweet_count - b.tweet_count;
 }
 
-// get random number of seconds between 0 and 8 (TODO set max and min seconds)
+// get random number of seconds between 45 and 80
 var random_tweet_interval = function() {
-    var min_seconds = 16;
-    var max_seconds = 33;
+    var min_seconds = 45;
+    var max_seconds = 80;
     var interval = Math.ceil(Math.random()*(max_seconds-min_seconds)+min_seconds);
     if (VERBOSE) { console.log('timeout set: next tweet will be sent in ' + interval + ' seconds'); }
     return interval*1000;
@@ -262,6 +261,7 @@ function send_tweet() {
         connection.query(tweet_query, tweet_data, function (error, results, fields) {
             if (error) throw error;
             var tweet_id = results.insertId;
+            console.log(tweet.text);
             console.log('inserted tweet at id ' + tweet_id);
 
             var sequence = 1;
@@ -321,65 +321,68 @@ function send_tweet() {
                     headers: { "Content-Type": "application/json",
                                "Authorization": config.z_api_access_id+':'+token }
                 };
-                /*
+
                 client.post("https://z.umn.edu/api/v1/urls", args, function (data, response) {
                     if (data[0].result.status == 'success') {
                         link = data[0].result.message; //
                         if (VERBOSE) { console.log('short link created: ' + link); }
 
-                        // TODO Put code below back in here
-                    } else {
-                        console.log('error creating z short link:');
-                        console.log(data.result.message);
-                    }
-                });
-                */
-                var handle = tweet.user.screen_name
-                var tweet_to_send = tweet_templates[invite_template].replace('<handle>',handle) + ' ' + link;
+                        var handle = tweet.user.screen_name
+                        var tweet_to_send = tweet_templates[invite_template].replace('<handle>',handle) + ' ' + link;
 
-                console.log('TWEET:');
-                console.log(tweet_to_send);
-                console.log();
+                        console.log('TWEET:');
+                        console.log(tweet_to_send);
+                        console.log();
 
-                var parameters = {
-                    status: tweet_to_send,
-                    in_reply_to_status_id: tweet.id_str,
-                    //in_reply_to_status_id: '877623268257214464' // <- one of my tweets (@hannahjean515)
-                }
+                        var parameters = {
+                            status: tweet_to_send,
+                            in_reply_to_status_id: tweet.id_str,
+                            //in_reply_to_status_id: '877623268257214464' // <- one of my tweets (@hannahjean515)
+                        }
 
-                if (send_tweets_automatically) {
-                    if (VERBOSE) { console.log('sending tweet...'); }
-                    Twitter.post('statuses/update', parameters, function(err, data, response) {
-                        if(err) {
-                            console.log('Error posting tweet:');
-                            console.log(err);
-                            console.log();
+                        if (send_tweets_automatically) {
+                            if (VERBOSE) { console.log('sending tweet...'); }
+                            Twitter.post('statuses/update', parameters, function(err, data, response) {
+                                if(err) {
+                                    console.log('Error posting tweet:');
+                                    console.log(err);
+                                    console.log();
 
-                            var tweet_not_sent_data = { tweet_sent: false }
-                            connection.query(tweet_not_sent_query, [tweet_not_sent_data,survey_id], function (error, results, fields) {
-                                if (error) throw error;
-                                clearTimeout(send_tweet_timeout);
-                                send_tweet();
+                                    var tweet_not_sent_data = { tweet_sent: false }
+                                    connection.query(tweet_not_sent_query, [tweet_not_sent_data,survey_id], function (error, results, fields) {
+                                        if (error) throw error;
+                                        clearTimeout(send_tweet_timeout);
+                                        send_tweet();
+                                    });
+                                } else {
+                                    TweetCounts[tweet_counts_index].tweet_count++;
+                                    TweetCounts.sort(sort_tweet_counts);
+                                    if (VERBOSE) { console.log('sent!'); console.log(); console.log(TweetCounts); console.log(); }
+                                }
                             });
                         } else {
                             TweetCounts[tweet_counts_index].tweet_count++;
                             TweetCounts.sort(sort_tweet_counts);
-                            if (VERBOSE) { console.log('sent!'); console.log(); console.log(TweetCounts); console.log(); }
+                            if (VERBOSE) { console.log(); console.log(TweetCounts); console.log(); }
                         }
-                    });
-                } else {
-                    TweetCounts[tweet_counts_index].tweet_count++;
-                    TweetCounts.sort(sort_tweet_counts);
-                    if (VERBOSE) { console.log(); console.log(TweetCounts); console.log(); }
-                }
-
+                    } else {
+                        console.log('error creating z short link:');
+                        console.log(data[0].result.message);
+                        var tweet_not_sent_data = { tweet_sent: false }
+                        connection.query(tweet_not_sent_query, [tweet_not_sent_data,survey_id], function (error, results, fields) {
+                            if (error) throw error;
+                            clearTimeout(send_tweet_timeout);
+                            send_tweet();
+                        });
+                    }
+                });
             });
         });
     });
 }
 
 function record_interval() {
-    console.log('recording throughput');
+    if(VERBOSE) { console.log('recording throughput'); }
     if (interval_count==1) {
         if(!config.throughput_headers) { csvStream.write({
             interval: '',
