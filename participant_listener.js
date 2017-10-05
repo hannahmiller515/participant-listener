@@ -88,6 +88,7 @@ var random_tweet_interval = function() {
     return interval*1000;
 }
 var send_tweet_timeout = setTimeout(send_tweet, random_tweet_interval());
+var send_account_tweet_timeout = setTimeout(send_account_tweet, (45*60));
 
 // TWITTER STREAM AND HANDLERS
 var twit = require('twit');
@@ -95,6 +96,8 @@ var Twitter = new twit(config);
 var stream = Twitter.stream('statuses/sample');
 var swearjar = require('swearjar');
 var tweet_templates = require('./tweet_templates.js').tweet_templates;
+var account_tweet_templates = require('./account_tweets.js').tweets;
+var cur_account_tweet = 0;
 
 // Handler for a tweet coming into the stream 
 stream.on('tweet', function (tweet) {
@@ -381,6 +384,25 @@ function send_tweet() {
     });
 }
 
+function send_account_tweet() {
+    send_account_tweet_timeout = setTimeout(send_account_tweet, (45*60));
+    var parameters = {
+        status:account_tweet_templates[cur_account_tweet]
+    }
+    Twitter.post('statuses/update', parameters, function(err, data, response) {
+        if(err) {
+            console.log('Error posting account tweet:');
+            console.log(err);
+            console.log();
+        } else {
+            console.log('sent account tweet:');
+            console.log(account_tweet_templates[cur_account_tweet])
+            console.log();
+            cur_account_tweet = (cur_account_tweet+1) % account_tweet_templates.length;
+        }
+    });
+}
+
 function record_interval() {
     if(VERBOSE) { console.log('recording throughput'); }
     if (interval_count==1) {
@@ -426,6 +448,7 @@ function stop_program() {
     csvStream.end();
     connection.destroy();
     clearTimeout(send_tweet_timeout);
+    clearTimeout(send_account_tweet_timeout);
     clearInterval(run_interval);
     //console.log('Total tweets in stream in ' + interval_seconds + ' seconds: ' + tweet_count);
     //console.log('Tweets that suffice our filter: ' + filtered_tweet_count);
